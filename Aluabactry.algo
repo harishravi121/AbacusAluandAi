@@ -1,0 +1,314 @@
+An abacus (specifically the modern 1:4 Soroban) calculates in bi-quinary decimal:
+ * Upper deck (Heaven bead): 1 bead representing a weight of 5 (0 or 1 active).
+ * Lower deck (Earth beads): 4 beads representing weights of 1 each (0 to 4 active).
+A digital chip implementation models each rod using bi-quinary registers: a 1-bit upper bead (upper) and a 3-bit count for lower beads (lower, range 0–4), forming a base-10 digit rod with the value:
+Below is a complete, synthesizable Verilog HDL module for an Abacus-based ALU (supporting Addition, Subtraction, and Inversion/9's Complement) along with carry/borrow propagation.
+Verilog HDL: Bi-Quinary Abacus ALU (abacus_alu.v)
+`timescale 1ns / 1ps
+
+module abacus_alu (
+    input  wire        clk,
+    input  wire        rst_n,
+    
+    // Control Opcode:
+    // 2'b00: ADD (A + B + Cin)
+    // 2'b01: SUB (A - B - Bin)
+    // 2'b10: 9's Complement of A
+    // 2'b11: Clear/Zero
+    input  wire [1:0]  alu_op,
+    
+    // Operands in Abacus Rod Format:
+    // upper: 1-bit (0 = inactive, 1 = bead down / value 5)
+    // lower: 3-bit (0 to 4 beads pushed toward beam)
+    input  wire        op_a_upper,
+    input  wire [2:0]  op_a_lower,
+    input  wire        cin_bin,       // Carry-in (ADD) or Borrow-in (SUB)
+    
+    input  wire        op_b_upper,
+    input  wire [2:0]  op_b_lower,
+    
+    // Results in Abacus Rod Format:
+    output reg         res_upper,
+    output reg  [2:0]  res_lower,
+    output reg         cout_bout,     // Carry-out or Borrow-out to adjacent rod
+    output reg         invalid_input  // Flag if an input rod exceeds 9 or lower > 4
+);
+
+    // Wire conversions: Abacus rod to integer value (0-9)
+    wire [3:0] val_a = (op_a_upper ? 4'd5 : 4'd0) + op_a_lower;
+    wire [3:0] val_b = (op_b_upper ? 4'd5 : 4'd0) + op_b_lower;
+
+    // Temporary full-range arithmetic registers
+    reg signed [5:0] raw_result;
+    reg        [3:0] rod_val;
+
+    always @(*) begin
+        // Validate Soroban structural constraints: lower deck <= 4
+        if ((op_a_lower > 3'd4) || (op_b_lower > 3'd4)) begin
+            invalid_input = 1'b1;
+        end else begin
+            invalid_input = 1'b0;
+        end
+
+        // ALU Operations executed under standard abacus rules
+        case (alu_op)
+            2'b00: begin // ADDITION with carry
+                raw_result = val_a + val_b + cin_bin;
+                if (raw_result >= 6'sd10) begin
+                    rod_val   = raw_result - 6'sd10;
+                    cout_bout = 1'b1; // Push carry bead to left rod
+                end else begin
+                    rod_val   = raw_result[3:0];
+                    cout_bout = 1'b0;
+                end
+            end
+
+            2'b01: begin // SUBTRACTION with borrow
+                raw_result = val_a - val_b - cin_bin;
+                if (raw_result < 6'sd0) begin
+                    rod_val   = raw_result + 6'sd10;
+                    cout_bout = 1'b1; // Borrow bead from left rod
+                end else begin
+                    rod_val   = raw_result[3:0];
+                    cout_bout = 1'b0;
+                end
+            end
+
+            2'b10: begin // 9's COMPLEMENT (Used in abacus division/subtraction)
+                rod_val   = 4'd9 - val_a;
+                cout_bout = 1'b0;
+            end
+
+            2'b11: begin // CLEAR (Push all beads away from center beam)
+                rod_val   = 4'd0;
+                cout_bout = 1'b0;
+            end
+        endcase
+    end
+
+    // Sequential output registered on clock edge:
+    // Encodes final digit into bi-quinary abacus bead positions
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            res_upper <= 1'b0;
+            res_lower <= 3'b000;
+        end else begin
+            if (rod_val >= 4'd5) begin
+                res_upper <= 1'b1;              // Lower 5-bead down to center beam
+                res_lower <= rod_val - 4'd5;    // Remaining 1-beads up to center beam
+            end else begin
+                res_upper <= 1'b0;              // Upper 5-bead pushed away
+                res_lower <= rod_val[2:0];      // 1-beads pushed toward center beam
+            end
+        end
+    end
+
+endmodule
+
+Verification Testbench (tb_abacus_alu.v)
+This testbench demonstrates Soroban addition rules: adding 7 (Upper: 1, Lower: 2) and 6 (Upper: 1, Lower: 1) results in 3 on this rod (Upper: 0, Lower: 3) and a Carry-out = 1 to the next column.
+`timescale 1ns / 1ps
+
+module tb_abacus_alu;
+    reg        clk;
+    reg        rst_n;
+    reg  [1:0] alu_op;
+    reg        op_a_upper;
+    reg  [2:0] op_a_lower;
+    reg        cin_bin;
+    reg        op_b_upper;
+    reg  [2:0] op_b_lower;
+
+    wire       res_upper;
+    wire [2:0] res_lower;
+    wire       cout_bout;
+    wire       invalid_input;
+
+    abacus_alu uut (
+        .clk(clk),
+        .rst_n(rst_n),
+        .alu_op(alu_op),
+        .op_a_upper(op_a_upper),
+        .op_a_lower(op_a_lower),
+        .cin_bin(cin_bin),
+        .op_b_upper(op_b_upper),
+        .op_b_lower(op_b_lower),
+        .res_upper(res_upper),
+        .res_lower(res_lower),
+        .cout_bout(cout_bout),
+        .invalid_input(invalid_input)
+    );
+
+    always #5 clk = ~clk; // 100 MHz clock
+
+    initial begin
+        clk = 0;
+        rst_n = 0;
+        alu_op = 2'b00;
+        op_a_upper = 0; op_a_lower = 0;
+        op_b_upper = 0; op_b_lower = 0;
+        cin_bin = 0;
+
+        #15 rst_n = 1;
+
+        // Test 1: Addition 7 + 6 (Should equal 13 -> Rod Value 3, Carry 1)
+        // 7 = upper(1) + lower(2)
+        // 6 = upper(1) + lower(1)
+        #10;
+        alu_op     = 2'b00;
+        op_a_upper = 1'b1; op_a_lower = 3'd2;
+        op_b_upper = 1'b1; op_b_lower = 3'd1;
+        cin_bin    = 1'b0;
+
+        // Test 2: Subtraction 4 - 8 (Should borrow 1, rod result 6)
+        // 4 = upper(0) + lower(4)
+        // 8 = upper(1) + lower(3)
+        #10;
+        alu_op     = 2'b01;
+        op_a_upper = 1'b0; op_a_lower = 3'd4;
+        op_b_upper = 1'b1; op_b_lower = 3'd3;
+        cin_bin    = 1'b0;
+
+        #20 $finish;
+    end
+endmodule
+
+Hardware Mapping Summary
+| Signal | Physical Abacus Equivalent | Valid Range |
+|---|---|---|
+| op_a_upper | Upper deck bead position on Rod A | 0 (Away) or 1 (Active/Touching Beam = 5) |
+| op_a_lower | Lower deck active beads on Rod A | 3'd0 to 3'd4 (Count of beads touching beam) |
+| cout_bout | Leftward rod carry/borrow transmission | 1 if sum \ge 10 or difference < 0 |
+| res_upper / res_lower | Settled position of result beads | Canonical bi-quinary representation (0 \dots 9) |
+
+To build a practical abacus ALU on a digital chip, individual rods must be chained together so that a carry or borrow from one column propagates to the next.
+This implementation creates a 4-digit (4-rod) Ripple-Carry Abacus ALU. It first defines a single combinational abacus rod, then wires four of them together into a complete clocked processor block.
+1. Single Abacus Rod (Combinational)
+This module calculates the sum or difference for a single bi-quinary decimal digit, translating the 5-weight "heaven" bead and 1-weight "earth" beads into standard logic.
+`timescale 1ns / 1ps
+
+module abacus_rod (
+    input  wire       sub_mode, // 0 = ADD, 1 = SUBTRACT
+    input  wire       a_up,     // Upper bead A (Weight 5)
+    input  wire [2:0] a_low,    // Lower beads A (Weight 1)
+    input  wire       b_up,     // Upper bead B (Weight 5)
+    input  wire [2:0] b_low,    // Lower beads B (Weight 1)
+    input  wire       c_in,     // Carry/Borrow In
+    output reg        r_up,     // Upper bead Result
+    output reg  [2:0] r_low,    // Lower beads Result
+    output reg        c_out     // Carry/Borrow Out to next rod
+);
+
+    wire [3:0] val_a = (a_up ? 4'd5 : 4'd0) + a_low;
+    wire [3:0] val_b = (b_up ? 4'd5 : 4'd0) + b_low;
+    reg signed [5:0] raw_calc;
+    reg        [3:0] rod_val;
+
+    always @(*) begin
+        if (!sub_mode) begin
+            // Addition logic
+            raw_calc = val_a + val_b + c_in;
+            if (raw_calc >= 6'sd10) begin
+                rod_val = raw_calc - 6'sd10;
+                c_out   = 1'b1;
+            end else begin
+                rod_val = raw_calc[3:0];
+                c_out   = 1'b0;
+            end
+        end else begin
+            // Subtraction logic
+            raw_calc = val_a - val_b - c_in;
+            if (raw_calc < 6'sd0) begin
+                rod_val = raw_calc + 6'sd10;
+                c_out   = 1'b1;
+            end else begin
+                rod_val = raw_calc[3:0];
+                c_out   = 1'b0;
+            end
+        end
+
+        // Translate integer result back to bi-quinary bead positions
+        if (rod_val >= 4'd5) begin
+            r_up  = 1'b1;
+            r_low = rod_val - 4'd5;
+        end else begin
+            r_up  = 1'b0;
+            r_low = rod_val[2:0];
+        end
+    end
+endmodule
+
+2. Multi-Digit Abacus ALU (Sequential)
+This top-level module instantiates four rods, creating a 4-digit decimal calculator (capable of representing 0000 to 9999) with registered outputs for synchronous chip operation.
+module abacus_4digit_alu (
+    input  wire        clk,
+    input  wire        rst_n,
+    input  wire        alu_sub, // 0 = A+B, 1 = A-B
+    
+    // 4-Digit Operand A [Upper(1 bit) : Lower(3 bits) per digit]
+    input  wire [15:0] op_a, 
+    // 4-Digit Operand B
+    input  wire [15:0] op_b,
+    
+    // 4-Digit Result
+    output reg  [15:0] result,
+    output reg         overflow
+);
+
+    wire [15:0] res_wire;
+    wire c_out_0, c_out_1, c_out_2, c_out_3;
+
+    // Rod 0 (Units / 10^0)
+    abacus_rod rod0 (
+        .sub_mode(alu_sub),
+        .a_up(op_a[3]),   .a_low(op_a[2:0]),
+        .b_up(op_b[3]),   .b_low(op_b[2:0]),
+        .c_in(1'b0),
+        .r_up(res_wire[3]), .r_low(res_wire[2:0]),
+        .c_out(c_out_0)
+    );
+
+    // Rod 1 (Tens / 10^1)
+    abacus_rod rod1 (
+        .sub_mode(alu_sub),
+        .a_up(op_a[7]),   .a_low(op_a[6:4]),
+        .b_up(op_b[7]),   .b_low(op_b[6:4]),
+        .c_in(c_out_0),
+        .r_up(res_wire[7]), .r_low(res_wire[6:4]),
+        .c_out(c_out_1)
+    );
+
+    // Rod 2 (Hundreds / 10^2)
+    abacus_rod rod2 (
+        .sub_mode(alu_sub),
+        .a_up(op_a[11]),  .a_low(op_a[10:8]),
+        .b_up(op_b[11]),  .b_low(op_b[10:8]),
+        .c_in(c_out_1),
+        .r_up(res_wire[11]), .r_low(res_wire[10:8]),
+        .c_out(c_out_2)
+    );
+
+    // Rod 3 (Thousands / 10^3)
+    abacus_rod rod3 (
+        .sub_mode(alu_sub),
+        .a_up(op_a[15]),  .a_low(op_a[14:12]),
+        .b_up(op_b[15]),  .b_low(op_b[14:12]),
+        .c_in(c_out_2),
+        .r_up(res_wire[15]), .r_low(res_wire[14:12]),
+        .c_out(c_out_3)
+    );
+
+    // Synchronous Output Register
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            result   <= 16'd0;
+            overflow <= 1'b0;
+        end else begin
+            result   <= res_wire;
+            overflow <= c_out_3;
+        end
+    end
+
+endmodule
+
+
