@@ -1,0 +1,109 @@
+
+This C implementation simulates the behavioral logic of a hardware abacus ALU. It defines the bi-quinary rod states (upper and lower decks) as structural bit-fields and processes multi-digit arithmetic using ripple-carry logic, mimicking how a digital chip would propagate signals between digit blocks.
+#include <stdio.h>
+#include <stdint.h>
+
+// Simulates the physical hardware registers of a single Soroban rod
+typedef struct {
+    uint8_t upper : 1; // 1-bit register: 0 or 1 (Weight = 5)
+    uint8_t lower : 3; // 3-bit register: 0 to 4 (Weight = 1)
+} AbacusRod;
+
+// ALU Opcode Definitions
+typedef enum {
+    ALU_ADD = 0,
+    ALU_SUB = 1
+} AluOp;
+
+// Single Rod Combinational Logic
+AbacusRod process_rod(AluOp op, AbacusRod a, AbacusRod b, uint8_t *carry_borrow) {
+    AbacusRod res;
+    int val_a = (a.upper * 5) + a.lower;
+    int val_b = (b.upper * 5) + b.lower;
+    int raw_calc;
+
+    if (op == ALU_ADD) {
+        raw_calc = val_a + val_b + *carry_borrow;
+        if (raw_calc >= 10) {
+            raw_calc -= 10;
+            *carry_borrow = 1; // Carry out to next digit
+        } else {
+            *carry_borrow = 0;
+        }
+    } else { // ALU_SUB
+        raw_calc = val_a - val_b - *carry_borrow;
+        if (raw_calc < 0) {
+            raw_calc += 10;
+            *carry_borrow = 1; // Borrow from next digit
+        } else {
+            *carry_borrow = 0;
+        }
+    }
+
+    // Hardware encoder: Integer back to Bi-Quinary states
+    res.upper = (raw_calc >= 5) ? 1 : 0;
+    res.lower = (raw_calc >= 5) ? (raw_calc - 5) : raw_calc;
+    
+    return res;
+}
+
+// 4-Digit Ripple-Carry Abacus ALU
+void abacus_alu_4digit(AluOp op, AbacusRod op_a[4], AbacusRod op_b[4], AbacusRod result[4], uint8_t *overflow) {
+    uint8_t cb = 0; // Carry/Borrow line
+    
+    // Process from LSB (Rod 0) to MSB (Rod 3)
+    for (int i = 0; i < 4; i++) {
+        result[i] = process_rod(op, op_a[i], op_b[i], &cb);
+    }
+    *overflow = cb;
+}
+
+// Helper: Convert integer to 4-rod array
+void int_to_abacus(int num, AbacusRod rods[4]) {
+    for (int i = 0; i < 4; i++) {
+        int digit = num % 10;
+        rods[i].upper = digit / 5;
+        rods[i].lower = digit % 5;
+        num /= 10;
+    }
+}
+
+int main() {
+    AbacusRod a[4], b[4], result[4];
+    uint8_t overflow = 0;
+
+    // Test Case: Add 27 + 15
+    printf("Operation: 27 + 15\n");
+    int_to_abacus(27, a);
+    int_to_abacus(15, b);
+
+    abacus_alu_4digit(ALU_ADD, a, b, result, &overflow);
+
+    printf("\nResulting Rod States (MSB -> LSB):\n");
+    int final_val = 0;
+    int multiplier = 1;
+    
+    // Print in reverse order (MSB on the left, LSB on the right)
+    for (int i = 3; i >= 0; i--) {
+        printf("Rod %d: Upper=%d, Lower=%d\n", i, result[i].upper, result[i].lower);
+        
+        int digit_val = (result[i].upper * 5) + result[i].lower;
+        // Accumulate final decimal for verification (from LSB up)
+    }
+    
+    // Reconstruct value
+    for (int i = 0; i < 4; i++) {
+        final_val += ((result[i].upper * 5) + result[i].lower) * multiplier;
+        multiplier *= 10;
+    }
+
+    printf("\nDecoded Decimal Value: %d\n", final_val);
+    printf("Overflow Flag: %d\n", overflow);
+
+    return 0;
+}
+
+Hardware Mapping Details
+ * Bit-Fields: The uint8_t upper : 1 and lower : 3 strictly mirror the register sizing of the Verilog implementation (1 bit for the 5-weight bead, 3 bits for the 1-weight beads).
+ * Ripple-Carry Array: The for loop in abacus_alu_4digit acts as a cascade of combinational blocks, passing the &cb pointer exactly like a hardware carry wire moving from the Least Significant Digit (Rod 0) to the Most Significant Digit (Rod 3).
+
