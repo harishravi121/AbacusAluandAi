@@ -1,0 +1,73 @@
+This Python script models a Soroban (Japanese Abacus). It maps integer values into bi-quinary bead states (1 upper bead worth 5, and 4 lower beads worth 1 each) and renders them as ASCII art to visualize the addition process.
+class Abacus:
+    def __init__(self, rods=4):
+        self.rods = rods
+        self.value = 0
+
+    def add(self, num):
+        """Adds a number to the current abacus value."""
+        self.value += num
+
+    def _get_rod_ascii(self, digit):
+        """Generates the ASCII vertical rows for a single digit."""
+        upper = digit // 5
+        lower = digit % 5
+        
+        rows = []
+        # Upper Deck (1 bead: value 5)
+        # Bead is UP (away from beam) if 0, DOWN (touching beam) if 1
+        rows.append('(O)' if upper == 0 else ' | ')
+        rows.append(' | ' if upper == 0 else '(O)')
+        
+        # Center Beam
+        rows.append('---')
+        
+        # Lower Deck (4 beads: value 1 each, plus 1 empty space on the rod)
+        # The empty space shifts downward as beads are pushed up toward the beam
+        for i in range(5):
+            rows.append(' | ' if i == lower else '(O)')
+            
+        return rows
+
+    def render(self):
+        """Prints the entire abacus side-by-side."""
+        # Zero-pad the string to match the number of physical rods
+        val_str = str(self.value).zfill(self.rods)
+        
+        if len(val_str) > self.rods:
+            print("Overflow Error: Value exceeds number of rods.")
+            return
+
+        rod_grids = [self._get_rod_ascii(int(digit)) for digit in val_str]
+        
+        print(f"Numeric Value: {self.value}")
+        print(" " + "=" * (self.rods * 4))
+        
+        # Transpose the grid to print horizontally, row by row
+        for row_idx in range(8):
+            print("  " + " ".join(rod[row_idx] for rod in rod_grids))
+            
+        print(" " + "=" * (self.rods * 4) + "\n")
+
+
+# === Simulation Run ===
+if __name__ == "__main__":
+    abacus = Abacus(rods=4)
+    
+    print("Step 1: Initial State")
+    abacus.render()
+    
+    print("Step 2: Add 27")
+    abacus.add(27)
+    abacus.render()
+    
+    print("Step 3: Add 15 (Demonstrates carry-over: 7 + 5 = 12, carrying 1 to tens)")
+    abacus.add(15)
+    abacus.render()
+
+Visual Output Guide
+The terminal output maps physical bead movements to text characters:
+ * (O) represents a physical bead.
+ * | represents the bare rod (empty space where a bead could slide).
+ * --- represents the center reckoning beam.
+ * A bead only counts toward the value when it is pushed directly against the center --- beam.
